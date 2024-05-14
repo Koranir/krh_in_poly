@@ -1,24 +1,35 @@
 #![no_std]
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![allow(clippy::float_cmp)]
 
 #[must_use]
+/// Check if a point is in a polygon.
 pub fn in_polygon((px, py): (f32, f32), poly: &[(f32, f32)]) -> bool {
+    // Iterator of the points in the polygon.
     let poly_iter = poly.iter().copied().cycle();
 
     let winding_number: i32 = poly_iter
         .clone()
+        // The starts of the edges.
         .take(poly.len())
+        // The ends of the edges.
         .zip(poly_iter.skip(1).take(poly.len()))
+        // Only calculate a winding number for edges that are in the y and x bounds.
         .filter_map(|((x0, y0), (x1, y1))| {
+            // A point `py` is in the y bounds if it is in `y0..=y1`.
             let in_y = (py <= y0) == (py >= y1);
-            let my = (y0 - py) / (y0 - y1);
-            let my = if my.is_nan() { 1.0 } else { my };
+            // Make sure divide by zeros don't break things.
+            let my = if y0 == y1 { 1.0 } else { (y0 - py) / (y0 - y1) };
+            // Linear segment, can linearly interpolate between x0 and x1 with the percentage between y0 and y1 py is to get the x value of the edge at py.
             let vx = x1 - x0;
             let in_x = px < (x0 + vx * my);
-            #[allow(clippy::float_cmp)]
+            // Special case if we're directly on an edge/point.
             if in_y && in_x && py == y0 || px == x0 {
                 return Some(1);
             }
+            // Winding number, when we approach a line from the left ( -> ):
+            // If the line's last point is top-right or bottom-left ( / ), increasing
+            // If the line's last point is top-left or bottom-right ( \ ), decreasing
             (in_y && in_x).then_some(match (x0 > x1, y0 > y1) {
                 (true, true) | (false, false) => 1,
                 (true, false) | (false, true) => -1,
@@ -26,6 +37,7 @@ pub fn in_polygon((px, py): (f32, f32), poly: &[(f32, f32)]) -> bool {
         })
         .sum();
 
+    // If the winding number is zero, we are outside the polygon.
     winding_number != 0
 }
 
