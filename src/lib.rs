@@ -1,6 +1,109 @@
-#![no_std]
+#![cfg_attr(feature = "no_std", no_std)]
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::float_cmp)]
+
+#[cfg(feature = "no_std")]
+#[allow(clippy::inline_always)]
+mod math {
+    #[inline(always)]
+    pub fn sqrt(a: f32) -> f32 {
+        libm::sqrtf(a)
+    }
+
+    #[inline(always)]
+    pub fn mul_add(a: f32, mul: f32, add: f32) -> f32 {
+        a * mul + add
+    }
+}
+
+#[cfg(feature = "std")]
+#[allow(clippy::inline_always)]
+mod math {
+    #[inline(always)]
+    pub fn sqrt(a: f32) -> f32 {
+        a.sqrt()
+    }
+
+    #[inline(always)]
+    pub fn mul_add(a: f32, mul: f32, add: f32) -> f32 {
+        a.mul_add(mul, add)
+    }
+}
+
+use math::{mul_add, sqrt};
+
+// #[must_use]
+// #[allow(clippy::similar_names)]
+// fn cubic_bezier_wind(
+//     (px, py): (f32, f32),
+//     (qax, qay): (f32, f32),
+//     (qbx, qby): (f32, f32),
+//     (qcx, qcy): (f32, f32),
+//     (qdx, qdy): (f32, f32),
+// ) -> i32 {
+//     // solve p = ((1-t)^3)a + (3t(1-t)^2)b + (3t^2)(1-t)c + (t^3)d for t
+
+//     todo!()
+// }
+
+#[must_use]
+#[allow(clippy::similar_names)]
+pub fn quadratic_bezier_wind(
+    (px, py): (f32, f32),
+    (qax, qay): (f32, f32),
+    (qbx, qby): (f32, f32),
+    (qcx, qcy): (f32, f32),
+) -> i32 {
+    let det = mul_add(
+        qay,
+        py,
+        mul_add(qby, qby, mul_add(qay, qcy, -2.0 * qby * py)),
+    ); // (qay * py) + (qby * qby) + (qay * qcy) - (2.0 * qby * py);
+    if det < 0.0 {
+        return 0;
+    }
+
+    let ab = qay - qby;
+    let a2bc = mul_add(qby, -2.0, qay) + qcy; //  qay - (2.0 * qby) + qcy;
+
+    let t0 = (sqrt(det) + ab) / a2bc;
+    let t1 = (-sqrt(det) + ab) / a2bc;
+
+    let quad_x = |t| {
+        let tm1 = 1.0 - t;
+        // (tm1 * tm1 * qax) + (2.0 * t * tm1 * qbx) + (t * t * qcx)
+        mul_add(t * t, qcx, mul_add(tm1 * tm1, qax, 2.0 * t * tm1 * qbx))
+    };
+    let quad_ddx = |t| {
+        let trcp1 = 1.0 / t - 1.0;
+
+        // let dy = trcp1 * (qby - qay) + (qcy - qby);
+        // let dx = trcp1 * (qbx - qax) + (qcx - qbx);
+        let dy = mul_add(trcp1, qby - qay, qcy - qby);
+        let dx = mul_add(trcp1, qbx - qax, qcx - qbx);
+
+        dy / dx
+    };
+
+    let mut wind = 0;
+    if (0.0..=1.0).contains(&t0) {
+        let qtx0 = quad_x(t0);
+        if px <= qtx0 {
+            let qddx0 = quad_ddx(t0);
+            wind += if qddx0 < 0.0 { 1 } else { -1 };
+        }
+    }
+    if (0.0..=1.0).contains(&t1) {
+        let qtx1 = quad_x(t1);
+
+        if px <= qtx1 {
+            let qddx1 = quad_ddx(qtx1);
+            wind += if qddx1 < 0.0 { 1 } else { -1 };
+        }
+    }
+
+    wind
+}
 
 #[must_use]
 /// Check if a point is in a polygon.
@@ -15,25 +118,30 @@ pub fn in_polygon((px, py): (f32, f32), poly: &[(f32, f32)]) -> bool {
         // The ends of the edges.
         .zip(poly_iter.skip(1).take(poly.len()))
         // Only calculate a winding number for edges that are in the y and x bounds.
-        .filter_map(|((x0, y0), (x1, y1))| {
+        .map(|((x0, y0), (x1, y1))| {
             // A point `py` is in the y bounds if it is in `y0..=y1`.
             let in_y = (py <= y0) == (py >= y1);
             // Make sure divide by zeros don't break things.
             let my = if y0 == y1 { 1.0 } else { (y0 - py) / (y0 - y1) };
             // Linear segment, can linearly interpolate between x0 and x1 with the percentage between y0 and y1 py is to get the x value of the edge at py.
             let vx = x1 - x0;
-            let in_x = px < (x0 + vx * my);
+            let in_x = px < mul_add(vx, my, x0); // (x0 + vx * my);
+
+            // Don't change the winding number if we're not in bounds of a line.
+            if !(in_y && in_x) {
+                return 0;
+            }
             // Special case if we're directly on an edge/point.
             if in_y && in_x && py == y0 || px == x0 {
-                return Some(1);
+                return 1;
             }
             // Winding number, when we approach a line from the left ( -> ):
             // If the line's last point is top-right or bottom-left ( / ), increasing
             // If the line's last point is top-left or bottom-right ( \ ), decreasing
-            (in_y && in_x).then_some(match (x0 > x1, y0 > y1) {
+            match (x0 > x1, y0 > y1) {
                 (true, true) | (false, false) => 1,
                 (true, false) | (false, true) => -1,
-            })
+            }
         })
         .sum();
 
@@ -312,5 +420,13 @@ mod test {
         let polygon = [(-1.0, -1.0), (-1.0, 1.0), (1.0, 1.0), (1.0, -1.0)];
         assert!(in_polygon((0.0, 0.0), &polygon)); // Inside the polygon
         assert!(!in_polygon((2.0, 2.0), &polygon)); // Outside the polygon
+    }
+
+    #[test]
+    fn test_bezier_curve_wind() {
+        assert_eq!(
+            quadratic_bezier_wind((-3.0, 2.0), (-1.0, 4.0), (-2.0, -3.0), (4.0, 1.0)),
+            -1
+        );
     }
 }

@@ -3,4 +3,10 @@ name = "krh_in_poly"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["std"]
+std = []
+no_std = ["libm"]
+
 [dependencies]
+libm = { version = "0.2.8", optional = true }
