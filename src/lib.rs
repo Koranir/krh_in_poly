@@ -63,16 +63,18 @@ mod math {
 }
 
 #[must_use]
-#[allow(clippy::similar_names, clippy::suboptimal_flops)]
-fn cubic_bezier_wind(
+#[allow(
+    clippy::similar_names,
+    clippy::suboptimal_flops,
+    clippy::many_single_char_names
+)]
+pub fn cubic_bezier_wind(
     (px, py): (f32, f32),
     (ax, ay): (f32, f32),
     (bx, by): (f32, f32),
     (cx, cy): (f32, f32),
     (dx, dy): (f32, f32),
 ) -> i32 {
-    // solve p = ((1-t)^3)a + (3t(1-t)^2)b + (3t^2)(1-t)c + (t^3)d for t
-
     let cubic_bezier_x_at = |t| {
         let m1t = 1.0 - t;
         let m1t2 = m1t * m1t;
@@ -105,14 +107,21 @@ fn cubic_bezier_wind(
         dy / dx
     };
 
-    let a2 = ay * ay;
-    let b2 = by * by;
-    let p = ((3.0 * ay * cy) - b2) / (3.0 * a2);
-    let qa227 = 27.0 * a2;
-    let qn = (2.0 * by * b2) - (9.0 * ay * by * cy) + (qa227 * dy);
-    let q = qn / (qa227 * ay);
+    let a = -ay + (3.0 * (by - cy)) + dy;
+    let b = 3.0 * (ay - 2.0 * by + cy);
+    let c = 3.0 * (by - ay);
+    let d = ay - py;
 
-    let correction = by / (-3.0 * ay);
+    dbg!(a, b, c, d);
+
+    let a2 = a * a;
+    let b2 = b * b;
+    let p = ((3.0 * a * c) - b2) / (3.0 * a2);
+    let qa227 = 27.0 * a2;
+    let qn = (2.0 * b * b2) - (9.0 * a * b * c) + (qa227 * d);
+    let q = qn / (qa227 * a);
+
+    let correction = b / (-3.0 * a);
 
     let p2 = p * p;
     let p3 = p2 * p;
@@ -120,9 +129,11 @@ fn cubic_bezier_wind(
 
     let discrim = (-4.0 * p3) + (-27.0 * q2);
 
+    dbg!(p, q, discrim);
+
     let (root, others) = if discrim > 0.0 {
         let tk0 = 2.0 * sqrt(-p / 3.0);
-        let tk1 = (3.0 * p) / (2.0 * p);
+        let tk1 = (3.0 * q) / (2.0 * p);
         let tk1 = tk1 * sqrt(-3.0 / p);
         let tk1 = (1.0 / 3.0) * arccos(tk1);
 
@@ -143,6 +154,8 @@ fn cubic_bezier_wind(
 
         (tc1 + tc2 + correction, None)
     };
+
+    dbg!(root, others);
 
     let mut wind = 0;
     if (0.0..=1.0).contains(&root) {
@@ -563,10 +576,20 @@ mod test {
                 (-20.0, 0.0),
                 (31.4, -25.0),
                 (24.6, 9.9),
-                (-18.0, 24.6),
+                (-12.5, -4.6),
                 (-20.0, -29.0)
             ),
             0
+        );
+        assert_eq!(
+            cubic_bezier_wind(
+                (0.0, -20.0),
+                (31.4, -25.0),
+                (24.6, 9.9),
+                (-18.0, 24.6),
+                (-20.0, -29.0)
+            ),
+            1
         );
     }
 }
