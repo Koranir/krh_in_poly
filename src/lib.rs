@@ -2,6 +2,8 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::float_cmp)]
 
+use math::{arccos, cbrt, cos, mul_add, sqrt};
+
 #[cfg(feature = "no_std")]
 #[allow(clippy::inline_always)]
 mod math {
@@ -11,8 +13,23 @@ mod math {
     }
 
     #[inline(always)]
+    pub fn cbrt(a: f32) -> f32 {
+        libm::cbrtf(a)
+    }
+
+    #[inline(always)]
     pub fn mul_add(a: f32, mul: f32, add: f32) -> f32 {
         a * mul + add
+    }
+
+    #[inline(always)]
+    pub fn arccos(a: f32) -> f32 {
+        libm::acosf(a)
+    }
+
+    #[inline(always)]
+    pub fn cos(a: f32) -> f32 {
+        libm::cosf(a)
     }
 }
 
@@ -25,26 +42,135 @@ mod math {
     }
 
     #[inline(always)]
+    pub fn cbrt(a: f32) -> f32 {
+        a.cbrt()
+    }
+
+    #[inline(always)]
     pub fn mul_add(a: f32, mul: f32, add: f32) -> f32 {
         a.mul_add(mul, add)
     }
+
+    #[inline(always)]
+    pub fn arccos(a: f32) -> f32 {
+        a.acos()
+    }
+
+    #[inline(always)]
+    pub fn cos(a: f32) -> f32 {
+        a.cos()
+    }
 }
 
-use math::{mul_add, sqrt};
+#[must_use]
+#[allow(clippy::similar_names, clippy::suboptimal_flops)]
+fn cubic_bezier_wind(
+    (px, py): (f32, f32),
+    (ax, ay): (f32, f32),
+    (bx, by): (f32, f32),
+    (cx, cy): (f32, f32),
+    (dx, dy): (f32, f32),
+) -> i32 {
+    // solve p = ((1-t)^3)a + (3t(1-t)^2)b + (3t^2)(1-t)c + (t^3)d for t
 
-// #[must_use]
-// #[allow(clippy::similar_names)]
-// fn cubic_bezier_wind(
-//     (px, py): (f32, f32),
-//     (qax, qay): (f32, f32),
-//     (qbx, qby): (f32, f32),
-//     (qcx, qcy): (f32, f32),
-//     (qdx, qdy): (f32, f32),
-// ) -> i32 {
-//     // solve p = ((1-t)^3)a + (3t(1-t)^2)b + (3t^2)(1-t)c + (t^3)d for t
+    let cubic_bezier_x_at = |t| {
+        let m1t = 1.0 - t;
+        let m1t2 = m1t * m1t;
+        let t2 = t * t;
+        let a = ax * m1t2 * m1t;
+        let b = bx * 3.0 * t * m1t2;
+        let c = 3.0 * t2 * m1t * cx;
+        let d = t2 * t * dx;
 
-//     todo!()
-// }
+        a + b + c + d
+    };
+
+    let cubic_bezier_ddx_at = |t| {
+        let m1t = 1.0 - t;
+        let m1t2 = m1t * m1t;
+        let t2 = t * t;
+        let tm1t2 = 3.0 * m1t2;
+        let sm1tt = 6.0 * m1t * t;
+        let tt2 = 3.0 * t2;
+        let ay = tm1t2 * (by - ay);
+        let ax = tm1t2 * (bx - ax);
+        let by = sm1tt * (cy - by);
+        let bx = sm1tt * (cx - bx);
+        let cy = tt2 * (dy - cy);
+        let cx = tt2 * (dx - cx);
+
+        let dy = ay + by + cy;
+        let dx = ax + bx + cx;
+
+        dy / dx
+    };
+
+    let a2 = ay * ay;
+    let b2 = by * by;
+    let p = ((3.0 * ay * cy) - b2) / (3.0 * a2);
+    let qa227 = 27.0 * a2;
+    let qn = (2.0 * by * b2) - (9.0 * ay * by * cy) + (qa227 * dy);
+    let q = qn / (qa227 * ay);
+
+    let correction = by / (-3.0 * ay);
+
+    let p2 = p * p;
+    let p3 = p2 * p;
+    let q2 = q * q;
+
+    let discrim = (-4.0 * p3) + (-27.0 * q2);
+
+    let (root, others) = if discrim > 0.0 {
+        let tk0 = 2.0 * sqrt(-p / 3.0);
+        let tk1 = (3.0 * p) / (2.0 * p);
+        let tk1 = tk1 * sqrt(-3.0 / p);
+        let tk1 = (1.0 / 3.0) * arccos(tk1);
+
+        let root1 = tk0 * cos(tk1);
+        let root2 = tk0 * cos(tk1 - core::f32::consts::TAU * 2.0 * (1.0 / 3.0));
+        let root3 = tk0 * cos(tk1 - core::f32::consts::TAU * 2.0 * (2.0 / 3.0));
+
+        (
+            root1 + correction,
+            Some((root2 + correction, root3 + correction)),
+        )
+    } else {
+        let tc0 = sqrt(q2 / 4.0 + p3 / 27.0);
+        let mq2 = q / -2.0;
+
+        let tc1 = cbrt(mq2 + tc0);
+        let tc2 = cbrt(mq2 - tc0);
+
+        (tc1 + tc2 + correction, None)
+    };
+
+    let mut wind = 0;
+    if (0.0..=1.0).contains(&root) {
+        let qtx0 = cubic_bezier_x_at(root);
+        if px <= qtx0 {
+            let qddx0 = cubic_bezier_ddx_at(root);
+            wind += if qddx0 < 0.0 { 1 } else { -1 };
+        }
+    }
+    if let Some((r1, r2)) = others {
+        if (0.0..=1.0).contains(&r1) {
+            let qtx0 = cubic_bezier_x_at(r1);
+            if px <= qtx0 {
+                let qddx0 = cubic_bezier_ddx_at(r1);
+                wind += if qddx0 < 0.0 { 1 } else { -1 };
+            }
+        }
+        if (0.0..=1.0).contains(&r2) {
+            let qtx0 = cubic_bezier_x_at(r2);
+            if px <= qtx0 {
+                let qddx0 = cubic_bezier_ddx_at(r2);
+                wind += if qddx0 < 0.0 { 1 } else { -1 };
+            }
+        }
+    }
+
+    wind
+}
 
 #[must_use]
 #[allow(clippy::similar_names)]
@@ -127,13 +253,13 @@ pub fn in_polygon((px, py): (f32, f32), poly: &[(f32, f32)]) -> bool {
             let vx = x1 - x0;
             let in_x = px < mul_add(vx, my, x0); // (x0 + vx * my);
 
-            // Don't change the winding number if we're not in bounds of a line.
-            if !(in_y && in_x) {
-                return 0;
-            }
             // Special case if we're directly on an edge/point.
             if in_y && in_x && py == y0 || px == x0 {
                 return 1;
+            }
+            // Don't change the winding number if we're not in bounds of a line.
+            if !(in_y && in_x) {
+                return 0;
             }
             // Winding number, when we approach a line from the left ( -> ):
             // If the line's last point is top-right or bottom-left ( / ), increasing
@@ -427,6 +553,20 @@ mod test {
         assert_eq!(
             quadratic_bezier_wind((-3.0, 2.0), (-1.0, 4.0), (-2.0, -3.0), (4.0, 1.0)),
             -1
+        );
+    }
+
+    #[test]
+    fn test_cubic_curve_wind() {
+        assert_eq!(
+            cubic_bezier_wind(
+                (-20.0, 0.0),
+                (31.4, -25.0),
+                (24.6, 9.9),
+                (-18.0, 24.6),
+                (-20.0, -29.0)
+            ),
+            0
         );
     }
 }
