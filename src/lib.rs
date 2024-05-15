@@ -112,8 +112,6 @@ pub fn cubic_bezier_wind(
     let c = 3.0 * (by - ay);
     let d = ay - py;
 
-    dbg!(a, b, c, d);
-
     let a2 = a * a;
     let b2 = b * b;
     let p = ((3.0 * a * c) - b2) / (3.0 * a2);
@@ -128,8 +126,6 @@ pub fn cubic_bezier_wind(
     let q2 = q * q;
 
     let discrim = (-4.0 * p3) + (-27.0 * q2);
-
-    dbg!(p, q, discrim);
 
     let (root, others) = if discrim > 0.0 {
         let tk0 = 2.0 * sqrt(-p / 3.0);
@@ -154,8 +150,6 @@ pub fn cubic_bezier_wind(
 
         (tc1 + tc2 + correction, None)
     };
-
-    dbg!(root, others);
 
     let mut wind = 0;
     if (0.0..=1.0).contains(&root) {
