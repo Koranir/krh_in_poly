@@ -62,18 +62,28 @@ mod math {
     }
 }
 
+/// A point on the cartesian plane.
+/// (x, y)
+pub type Point = (f32, f32);
+/// A line segment.
+/// (start, end)
+pub type Line = (Point, Point);
+/// A quadratic bezier.
+/// (start, control, end)
+pub type QuadBezier = (Point, Point, Point);
+/// A cubic bezier.
+/// (start, start control, end control, end)
+pub type CubeBezier = (Point, Point, Point, Point);
+
 #[must_use]
-#[allow(
-    clippy::similar_names,
-    clippy::suboptimal_flops,
-    clippy::many_single_char_names
-)]
+#[allow(clippy::similar_names, clippy::many_single_char_names)]
+#[inline]
 pub fn cubic_bezier_wind(
-    (px, py): (f32, f32),
-    (ax, ay): (f32, f32),
-    (bx, by): (f32, f32),
-    (cx, cy): (f32, f32),
-    (dx, dy): (f32, f32),
+    (px, py): Point,
+    (ax, ay): Point,
+    (bx, by): Point,
+    (cx, cy): Point,
+    (dx, dy): Point,
 ) -> i32 {
     let cubic_bezier_x_at = |t| {
         let m1t = 1.0 - t;
@@ -107,16 +117,20 @@ pub fn cubic_bezier_wind(
         dy / dx
     };
 
-    let a = -ay + (3.0 * (by - cy)) + dy;
-    let b = 3.0 * (ay - 2.0 * by + cy);
+    // let a = -ay + (3.0 * (by - cy)) + dy;
+    let a = mul_add(by - cy, 3.0, dy) - ay;
+    // let b = 3.0 * (ay - 2.0 * by + cy);
+    let b = 3.0 * by.mul_add(-2.0, ay + cy);
     let c = 3.0 * (by - ay);
     let d = ay - py;
 
     let a2 = a * a;
     let b2 = b * b;
-    let p = ((3.0 * a * c) - b2) / (3.0 * a2);
+    // let p = ((3.0 * a * c) - b2) / (3.0 * a2);
+    let p = mul_add(3.0 * a, c, -b2) / (3.0 * a2);
     let qa227 = 27.0 * a2;
-    let qn = (2.0 * b * b2) - (9.0 * a * b * c) + (qa227 * d);
+    // let qn = (2.0 * b * b2) - (9.0 * a * b * c) + (qa227 * d);
+    let qn = mul_add(b2, b * 2.0, mul_add(qa227, d, -9.0 * a * b * c));
     let q = qn / (qa227 * a);
 
     let correction = b / (-3.0 * a);
@@ -125,7 +139,8 @@ pub fn cubic_bezier_wind(
     let p3 = p2 * p;
     let q2 = q * q;
 
-    let discrim = (-4.0 * p3) + (-27.0 * q2);
+    // let discrim = (-4.0 * p3) + (-27.0 * q2);
+    let discrim = mul_add(p3, -4.0, q2 * -27.0);
 
     let (root, others) = if discrim > 0.0 {
         let tk0 = 2.0 * sqrt(-p / 3.0);
@@ -134,8 +149,11 @@ pub fn cubic_bezier_wind(
         let tk1 = (1.0 / 3.0) * arccos(tk1);
 
         let root1 = tk0 * cos(tk1);
-        let root2 = tk0 * cos(tk1 - core::f32::consts::TAU * 2.0 * (1.0 / 3.0));
-        let root3 = tk0 * cos(tk1 - core::f32::consts::TAU * 2.0 * (2.0 / 3.0));
+        // let root2 = tk0 * cos(tk1 - core::f32::consts::TAU * 2.0 * (1.0 / 3.0));
+        #[allow(clippy::unreadable_literal)]
+        let root2 = tk0 * cos(tk1 - 4.1887902);
+        // let root3 = tk0 * cos(tk1 - core::f32::consts::TAU * 2.0 * (2.0 / 3.0));
+        let root3 = tk0 * cos(tk1 - 8.37758);
 
         (
             root1 + correction,
@@ -180,12 +198,13 @@ pub fn cubic_bezier_wind(
 }
 
 #[must_use]
+#[inline]
 #[allow(clippy::similar_names)]
 pub fn quadratic_bezier_wind(
-    (px, py): (f32, f32),
-    (qax, qay): (f32, f32),
-    (qbx, qby): (f32, f32),
-    (qcx, qcy): (f32, f32),
+    (px, py): Point,
+    (qax, qay): Point,
+    (qbx, qby): Point,
+    (qcx, qcy): Point,
 ) -> i32 {
     let det = mul_add(
         qay,
@@ -238,9 +257,37 @@ pub fn quadratic_bezier_wind(
     wind
 }
 
+#[inline]
+#[must_use]
+pub fn line_segment_wind((px, py): Point, (x0, y0): Point, (x1, y1): Point) -> i32 {
+    // A point `py` is in the y bounds if it is in `y0..=y1`.
+    let in_y = (py <= y0) == (py >= y1);
+    // Make sure divide by zeros don't break things.
+    let my = if y0 == y1 { 1.0 } else { (y0 - py) / (y0 - y1) };
+    // Linear segment, can linearly interpolate between x0 and x1 with the percentage between y0 and y1 py is to get the x value of the edge at py.
+    let vx = x1 - x0;
+    let in_x = px < mul_add(vx, my, x0); // (x0 + vx * my);
+
+    // Special case if we're directly on an edge/point.
+    if in_y && in_x && py == y0 || px == x0 {
+        return 1;
+    }
+    // Don't change the winding number if we're not in bounds of a line.
+    if !(in_y && in_x) {
+        return 0;
+    }
+    // Winding number, when we approach a line from the left ( -> ):
+    // If the line's last point is top-right or bottom-left ( / ), increasing
+    // If the line's last point is top-left or bottom-right ( \ ), decreasing
+    match (x0 > x1, y0 > y1) {
+        (true, true) | (false, false) => 1,
+        (true, false) | (false, true) => -1,
+    }
+}
+
 #[must_use]
 /// Check if a point is in a polygon.
-pub fn in_polygon((px, py): (f32, f32), poly: &[(f32, f32)]) -> bool {
+pub fn in_polygon((px, py): Point, poly: &[Point]) -> bool {
     // Iterator of the points in the polygon.
     let poly_iter = poly.iter().copied().cycle();
 
@@ -251,35 +298,36 @@ pub fn in_polygon((px, py): (f32, f32), poly: &[(f32, f32)]) -> bool {
         // The ends of the edges.
         .zip(poly_iter.skip(1).take(poly.len()))
         // Only calculate a winding number for edges that are in the y and x bounds.
-        .map(|((x0, y0), (x1, y1))| {
-            // A point `py` is in the y bounds if it is in `y0..=y1`.
-            let in_y = (py <= y0) == (py >= y1);
-            // Make sure divide by zeros don't break things.
-            let my = if y0 == y1 { 1.0 } else { (y0 - py) / (y0 - y1) };
-            // Linear segment, can linearly interpolate between x0 and x1 with the percentage between y0 and y1 py is to get the x value of the edge at py.
-            let vx = x1 - x0;
-            let in_x = px < mul_add(vx, my, x0); // (x0 + vx * my);
-
-            // Special case if we're directly on an edge/point.
-            if in_y && in_x && py == y0 || px == x0 {
-                return 1;
-            }
-            // Don't change the winding number if we're not in bounds of a line.
-            if !(in_y && in_x) {
-                return 0;
-            }
-            // Winding number, when we approach a line from the left ( -> ):
-            // If the line's last point is top-right or bottom-left ( / ), increasing
-            // If the line's last point is top-left or bottom-right ( \ ), decreasing
-            match (x0 > x1, y0 > y1) {
-                (true, true) | (false, false) => 1,
-                (true, false) | (false, true) => -1,
-            }
-        })
+        .map(|(start, end)| line_segment_wind((px, py), start, end))
         .sum();
 
     // If the winding number is zero, we are outside the polygon.
     winding_number != 0
+}
+
+#[must_use]
+pub fn in_poly_with_curves(
+    (px, py): (f32, f32),
+    lines: &[Line],
+    quadratics: &[QuadBezier],
+    cubics: &[CubeBezier],
+) -> bool {
+    let line_wind: i32 = lines
+        .iter()
+        .map(|f| line_segment_wind((px, py), f.0, f.1))
+        .sum();
+    let quad_wind: i32 = quadratics
+        .iter()
+        .map(|f| quadratic_bezier_wind((px, py), f.0, f.1, f.2))
+        .sum();
+    let cube_wind: i32 = cubics
+        .iter()
+        .map(|f| cubic_bezier_wind((px, py), f.0, f.1, f.2, f.3))
+        .sum();
+
+    let wind = line_wind + quad_wind + cube_wind;
+
+    wind != 0
 }
 
 #[cfg(test)]
