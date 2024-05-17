@@ -75,9 +75,161 @@ pub type QuadBezier = (Point, Point, Point);
 /// (start, start control, end control, end)
 pub type CubeBezier = (Point, Point, Point, Point);
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CachedLine {
+    pub(crate) upper: Point,
+    pub(crate) lower: Point,
+    pub(crate) wind: i32,
+    pub(crate) y_diff: f32,
+    pub(crate) x_diff: f32,
+}
+#[derive(Debug, Clone, Copy, Default)]
+pub struct YCachedLine {
+    pub(crate) line: CachedLine,
+    pub(crate) on_y: bool,
+    pub(crate) delta_y: f32,
+}
+impl CachedLine {
+    #[must_use]
+    pub fn new(start: Point, end: Point) -> Self {
+        let (upper, lower) = if start.1 > end.1 {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let wind = if upper.0 > lower.0 { 1 } else { -1 };
+
+        let y_diff = upper.1 - lower.1;
+        let x_diff = lower.0 - upper.0;
+
+        Self {
+            upper,
+            lower,
+            wind,
+            y_diff,
+            x_diff,
+        }
+    }
+
+    #[must_use]
+    pub fn y_cache(self, y: f32) -> Option<YCachedLine> {
+        let in_y = (y >= self.lower.1) && (y <= self.upper.1);
+        let my = if self.lower.1 == self.upper.1 {
+            1.0
+        } else {
+            (self.upper.1 - y) / self.y_diff
+        };
+        let on_y = y == self.upper.1;
+
+        in_y.then_some(YCachedLine {
+            on_y,
+            delta_y: my,
+            line: self,
+        })
+    }
+}
+impl YCachedLine {
+    #[must_use]
+    pub fn wind(self, x: f32) -> i32 {
+        let in_x = x < mul_add(self.line.x_diff, self.delta_y, self.line.upper.0);
+        let on_x = x.to_bits() == self.line.upper.0.to_bits();
+
+        let on_edge = self.on_y | on_x;
+        let mask = i32::MAX.wrapping_add(i32::from(on_edge));
+        let wind = self.line.wind & mask;
+        wind * i32::from(in_x)
+    }
+}
+
+/// [`into`] must be at least `polys.len() + 1` elements long.
+/// [`polys`] must be at least 3 elements long.
+/// Returns the amount of elements placed into [`into`]
+#[must_use]
+pub fn cache_segments(into: &mut [CachedLine], polys: &[Point]) -> Option<usize> {
+    if into.len() < polys.len() + 1 {
+        return None;
+    }
+    if polys.len() < 3 {
+        return None;
+    }
+    for (idx, ele) in polys.windows(2).enumerate() {
+        let [start, end] = *ele else { unreachable!() };
+        into[idx] = CachedLine::new(start, end);
+    }
+    into[polys.len()] = CachedLine::new(polys[0], polys[polys.len() - 1]);
+
+    Some(polys.len())
+}
+#[must_use]
+pub fn cache_segments_owned(polys: &[Point]) -> Option<Vec<CachedLine>> {
+    let mut buf = vec![CachedLine::default(); polys.len() + 1];
+    cache_segments(&mut buf, polys)?;
+    Some(buf)
+}
+#[must_use]
+pub fn cache_segments_y(
+    into: &mut [YCachedLine],
+    cached_lines: &[CachedLine],
+    y: f32,
+) -> Option<usize> {
+    if into.len() < cached_lines.len() {
+        return None;
+    }
+
+    let mut idx = 0;
+    for ele in cached_lines.iter().filter_map(|f| f.y_cache(y)) {
+        into[idx] = ele;
+
+        idx += 1;
+    }
+
+    Some(idx)
+}
+#[must_use]
+pub fn cache_segments_y_owned(cached_lines: &[CachedLine], y: f32) -> Vec<YCachedLine> {
+    cached_lines.iter().filter_map(|f| f.y_cache(y)).collect()
+}
+
+#[must_use]
+pub fn line_segment_wind_cached(x: f32, cached_lines: &[YCachedLine]) -> i32 {
+    let mut i1 = 0;
+
+    for l in cached_lines {
+        i1 += l.wind(x);
+    }
+
+    i1
+}
+
+#[must_use]
+pub fn line_segment_wind((px, py): Point, (x0, y0): Point, (x1, y1): Point) -> i32 {
+    // A point `py` is in the y bounds if it is in `y0..=y1`.
+    let in_y = (py <= y0) == (py >= y1);
+    // Make sure divide by zeros don't break things.
+    let my = if y0 == y1 { 1.0 } else { (y0 - py) / (y0 - y1) };
+    // Linear segment, can linearly interpolate between x0 and x1 with the percentage between y0 and y1 py is to get the x value of the edge at py.
+    let vx = x1 - x0;
+    let in_x = px < mul_add(vx, my, x0); // (x0 + vx * my);
+
+    // Special case if we're directly on an edge/point.
+    if in_y && in_x && py == y0 || px == x0 {
+        return 1;
+    }
+    // Don't change the winding number if we're not in bounds of a line.
+    if !(in_y && in_x) {
+        return 0;
+    }
+    // Winding number, when we approach a line from the left ( -> ):
+    // If the line's last point is top-right or bottom-left ( / ), increasing
+    // If the line's last point is top-left or bottom-right ( \ ), decreasing
+    match (x0 > x1, y0 > y1) {
+        (true, true) | (false, false) => 1,
+        (true, false) | (false, true) => -1,
+    }
+}
+
 #[must_use]
 #[allow(clippy::similar_names, clippy::many_single_char_names)]
-#[inline]
 pub fn cubic_bezier_wind(
     (px, py): Point,
     (ax, ay): Point,
@@ -198,7 +350,6 @@ pub fn cubic_bezier_wind(
 }
 
 #[must_use]
-#[inline]
 #[allow(clippy::similar_names)]
 pub fn quadratic_bezier_wind(
     (px, py): Point,
@@ -255,34 +406,6 @@ pub fn quadratic_bezier_wind(
     }
 
     wind
-}
-
-#[inline]
-#[must_use]
-pub fn line_segment_wind((px, py): Point, (x0, y0): Point, (x1, y1): Point) -> i32 {
-    // A point `py` is in the y bounds if it is in `y0..=y1`.
-    let in_y = (py <= y0) == (py >= y1);
-    // Make sure divide by zeros don't break things.
-    let my = if y0 == y1 { 1.0 } else { (y0 - py) / (y0 - y1) };
-    // Linear segment, can linearly interpolate between x0 and x1 with the percentage between y0 and y1 py is to get the x value of the edge at py.
-    let vx = x1 - x0;
-    let in_x = px < mul_add(vx, my, x0); // (x0 + vx * my);
-
-    // Special case if we're directly on an edge/point.
-    if in_y && in_x && py == y0 || px == x0 {
-        return 1;
-    }
-    // Don't change the winding number if we're not in bounds of a line.
-    if !(in_y && in_x) {
-        return 0;
-    }
-    // Winding number, when we approach a line from the left ( -> ):
-    // If the line's last point is top-right or bottom-left ( / ), increasing
-    // If the line's last point is top-left or bottom-right ( \ ), decreasing
-    match (x0 > x1, y0 > y1) {
-        (true, true) | (false, false) => 1,
-        (true, false) | (false, true) => -1,
-    }
 }
 
 #[must_use]
